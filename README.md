@@ -11,3 +11,4 @@ This appliction is set up to be built using autotools. You may use
 
 Feel free to propose changes to the functionality or documentation of this
 application.
+
