@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([Socket Helper Library w/ SSL], [0.1.0], [bugs@kara-online.net], [krossock], [])
+AC_INIT(["Kara's Socket Helper Library w/ SSL"], [0.1.0], [bugs@kara-online.net], [krossock], [https://github.com/Kara1147/krossock])
 
 #host switch
 AC_CANONICAL_HOST
