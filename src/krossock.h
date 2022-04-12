@@ -3,7 +3,9 @@
 
 typedef struct krossock_t *krossock_t;
 
-int krossock_init(krossock_t);
-int krossock_destroy(krossock_t);
+krossock_t krossock_connect(const char* addr);
+void krossock_disconnect(krossock_t ks);
+int krossock_send(krossock_t ks);
+int krossock_recv(krossock_t ks);
 
 #endif

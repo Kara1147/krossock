@@ -1,26 +1,37 @@
 #include "includes.h"
 #include "krossock_ssl.h"
 
+#include <ctype.h>
+#include <string.h>
+#include <termios.h>
+#include <unistd.h>
+
 #include <openssl/bio.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-typedef struct ssl_stuff {
+typedef struct krossock_ssl {
+	/* things you need to hold onto until the connection closes */
 	SSL_CTX *ctx;
 	BIO *bio;
 	SSL *ssl;
-} *ssl_stuff;
+} *krossock_ssl;
 
-ssl_stuff ssl_init()
+struct ssl_data {
+	/* things you need in order to initialize or connect */
+};
+
+krossock_ssl ssl_init(struct ssl_data *data)
 {
-	ssl_stuff data;
+	krossock_ssl kssl;
 
-	if ((data = malloc(sizeof(struct ssl_stuff))) == NULL) {
+	/* initialize */
+	if ((kssl = malloc(sizeof(struct krossock_ssl))) == NULL) {
 		errno = ENOMEM;
 		return NULL;
 	}
 
-	memset(data, 0, sizeof(struct ssl_stuff));
+	memset(kssl, 0, sizeof(struct krossock_ssl));
 
 	/* set up ssl things */
 	SSL_library_init();
@@ -30,13 +41,13 @@ ssl_stuff ssl_init()
 	
 	OpenSSL_add_all_algorithms();
 
-	data->ctx = SSL_CTX_new(SSLv23_method());
-	data->bio = BIO_new_ssl_connect(data->ctx);
+	kssl->ctx = SSL_CTX_new(SSLv23_method());
+	kssl->bio = BIO_new_ssl_connect(kssl->ctx);
 
 	/* initialize ssl */
-	BIO_get_ssl(data->bio, &(data->ssl));
+	BIO_get_ssl(kssl->bio, &(kssl->ssl));
 
-	if (!(data->ssl)) {
+	if (!(kssl->ssl)) {
 #ifdef SSL_HELPER_DEBUG
 		fputs("ssl_init: BIO_get_ssl: ", stderr);
 		ERR_print_errors_fp(stderr);
@@ -48,78 +59,30 @@ ssl_stuff ssl_init()
 	}
 
 	/* set ssl mode */
-	SSL_set_mode(data->ssl, SSL_MODE_AUTO_RETRY);
-	return data;
+	SSL_set_mode(kssl->ssl, SSL_MODE_AUTO_RETRY);
+
+	return kssl;
 }
 
-void ssl_destroy(ssl_stuff data)
+void ssl_destroy(krossock_ssl kssl)
 {
-	SSL_CTX_free(data->ctx);
-	BIO_free_all(data->bio);
-	free(data);
+	/* delete socket stuff */
+	SSL_CTX_free(kssl->ctx);
+	BIO_free_all(kssl->bio);
+	free(kssl);
 }
 
-krossock_t krossock_connect_ssl(const char* addr)
-{
-	krossock_t ks;
-	ssl_stuff data;
+/* add helper functions here to fill out the ssl_data structure */
 
-	if (!addr) {
-		errno = EINVAL;
-		return NULL;
-	}
-
-	/* initialize data */
-	if ((data = ssl_init()) == NULL)
-		return NULL;
-
-	/* set hostname and port */
-	BIO_set_conn_hostname(data->bio, addr);
-
-	/* initialize krossock */
-	if ((ks = malloc(sizeof(struct krossock_t))) == NULL) {
-		errno = ENOMEM;
-		ssl_destroy(data);
-		return NULL;
-	}
-
-	ks->type = SSL_SOCKET;
-	ks->data = data;
-	
-	/* do the connection part */
-	if (krossock_redial_ssl(ks) < 0) {
-		ssl_destroy(data);
-		free(ks);
-		return NULL;
-	}
-
-	return ks;
-}
-
-void krossock_disconnect_ssl(krossock_t ks)
-{
-	/* close any connections */
-	krossock_hangup_ssl(ks);
-
-	/* cleanup the socket stuff */
-	ssl_destroy(ks->data);
-
-	/* free mem */
-	free(ks);
-}
-
-int krossock_redial_ssl(krossock_t ks)
+int krossock_dial_ssl(krossock_ssl kssl)
 {
 	int ret = 0;
 	X509 *cert = NULL;
 
-	if (ks->type != SSL_SOCK)
-		ks
-
 	/* initial connection */
-	if (BIO_do_connect(ssl_struct->bio) <= 0) {
+	if (BIO_do_connect(kssl->bio) <= 0) {
 #ifdef SSL_HELPER_DEBUG
-		fputs("ssl_helper_connect: BIO_do_connect: ", stderr);
+		fputs("krossock_dial_ssl: BIO_do_connect: ", stderr);
 		ERR_print_errors_fp(stderr);
 #endif
 		fputs("Connection failed.\n", stderr);
@@ -130,9 +93,9 @@ int krossock_redial_ssl(krossock_t ks)
 	/* establish ssl handshake ? */
 
 	/* set up defaults */
-	if (SSL_CTX_set_default_verify_paths(ssl_struct->ctx) < 1) {
+	if (SSL_CTX_set_default_verify_paths(kssl->ctx) < 1) {
 #ifdef SSL_HELPER_DEBUG
-		fputs("ssl_helper_connect: SSL_CTX_set_default_verify_paths: ",
+		fputs("krossock_dial_ssl: SSL_CTX_set_default_verify_paths: ",
 		      stderr);
 		ERR_print_errors_fp(stderr);
 #endif
@@ -142,21 +105,18 @@ int krossock_redial_ssl(krossock_t ks)
 	}
 
 	/* validate ssl */
-	if ((ret = SSL_get_verify_result(ssl_struct->ssl)) != X509_V_OK) {
+	if ((ret = SSL_get_verify_result(kssl->ssl)) != X509_V_OK) {
 #ifdef SSL_HELPER_DEBUG
-		fputs("ssl_helper_connect: BIO_get_verify_result: ", stderr);
+		fputs("krossock_dial_ssl: BIO_get_verify_result: ", stderr);
 		ERR_print_errors_fp(stderr);
 #endif
-		fputs("SSL verification issue: ", stderr);
-		fputs(ssl_helper_get_err_code(verify_codes, VERIFY_CODES_SIZE,
-					      ret),
-		      stderr);
+		fputs("SSL verification failed.\n", stderr);
 		fputc('\n', stderr);
 		fflush(stderr);
 		/* show certificate details */
-		if ((cert = SSL_get_peer_certificate(ssl_struct->ssl)) == NULL)
+		if ((cert = SSL_get_peer_certificate(kssl->ssl)) == NULL)
 			return 1;
-		ssl_helper_print_certificate(cert);
+		//ssl_helper_print_certificate(cert);
 		X509_free(cert);
 		/* do you want to continue anyway? */
 
@@ -180,17 +140,17 @@ int krossock_redial_ssl(krossock_t ks)
 	}
 
 	// *connects in ssl*
-	if ((ret = SSL_connect(ssl_struct->ssl)) == 0) {
+	if ((ret = SSL_connect(kssl->ssl)) == 0) {
 		/* handle shutdown */
-		ret = SSL_get_error(ssl_struct->ssl, ret);
+		ret = SSL_get_error(kssl->ssl, ret);
 		fprintf(stderr, "Connection closed by peer. (%d)", ret);
-		if ((SSL_get_shutdown(ssl_struct->ssl) &
+		if ((SSL_get_shutdown(kssl->ssl) &
 		     SSL_RECEIVED_SHUTDOWN) == SSL_RECEIVED_SHUTDOWN)
-			SSL_shutdown(ssl_struct->ssl);
+			SSL_shutdown(kssl->ssl);
 		return 1;
 	} else if (ret < 0) {
 		/* handle error */
-		ret = SSL_get_error(ssl_struct->ssl, ret);
+		ret = SSL_get_error(kssl->ssl, ret);
 		fprintf(stderr, "Connection closed unexpectedly. (%d)", ret);
 		return 1;
 	}
@@ -198,64 +158,117 @@ int krossock_redial_ssl(krossock_t ks)
 	return 0;
 }
 
-int krossock_hangup_ssl(krossock_t ks)
+krossock_t krossock_connect_ssl(const char* address)
 {
-	errno = ENOSYS;
-	return -1;
+	krossock_t ks;
+	krossock_ssl kssl;
+	struct ssl_data data;
+
+	if (!address) {
+		errno = EINVAL;
+		return NULL;
+	}
+
+	/* initialize data */
+
+	/* create ssl */
+	if ((kssl = ssl_init(&data)) == NULL)
+		return NULL;
+
+	/* connect ssl */
+
+	/* set hostname and port */
+	BIO_set_conn_hostname(kssl->bio, address);
+	
+	/* do the connection part */
+	if (krossock_dial_ssl(kssl) < 0) {
+		ssl_destroy(kssl);
+		return NULL;
+	}
+
+	/* initialize krossock */
+	if ((ks = malloc(sizeof(struct krossock_t))) == NULL) {
+		errno = ENOMEM;
+		ssl_destroy(kssl);
+		return NULL;
+	}
+
+	ks->type = SSL_SOCKET;
+	ks->data = (void *)kssl;
+
+	return ks;
+}
+
+#define SSL_BUFFER_SIZE (1024 * 1024)
+void krossock_disconnect_ssl(krossock_t ks)
+{
+	int ret;
+
+	char buf[SSL_BUFFER_SIZE + 1] = { 0 };
+	size_t bytes_read;
+
+	errno = 0;
+
+	krossock_ssl kssl;
+
+	if (ks->type == SOCKET)
+		return krossock_disconnect(ks);
+
+	kssl = (krossock_ssl)ks->data;
+
+	/* read everything */
+	if (SSL_pending(kssl->ssl)) {
+		do {
+			if ((ret = SSL_read_ex(kssl->ssl, buf,
+					       SSL_BUFFER_SIZE,
+					       &bytes_read)) == 0) {
+				ret = SSL_get_error(kssl->ssl, ret);
+				fputs("Read error: ", stderr);
+				ERR_print_errors_fp(stderr);
+				fprintf(stderr, "\nerrno: %d\n", errno);
+				fflush(stderr);
+				/*
+				 * if (ret == SSL_ERROR_SSL ||ret == SSL_ERROR_SYSCALL)
+				 * 	return;
+				 */
+			}
+		} while (bytes_read != 0);
+	}
+
+	/* close connection */
+	if ((ret = SSL_shutdown(kssl->ssl)) == 0) {
+		/* bidirectional shutdown, I guess. */
+		SSL_read(kssl->ssl, buf, SSL_BUFFER_SIZE);
+	} else if (ret < 0) {
+		ret = SSL_get_error(kssl->ssl, ret);
+		fputs("shutdown error: ", stderr);
+		ERR_print_errors_fp(stderr);
+		fprintf(stderr, "\nerrno: %d\n", errno);
+		fflush(stderr);
+	}
+
+	/* cleanup the socket stuff */
+	ssl_destroy(kssl);
+
+	/* free mem */
+	free(ks);
 }
 
 int krossock_send_ssl(krossock_t ks)
 {
+	if (ks->type == SOCKET)
+		return krossock_send(ks);
+
 	errno = ENOSYS;
 	return -1;
 }
 
 int krossock_recv_ssl(krossock_t ks)
 {
+	if (ks->type == SOCKET)
+		return krossock_recv(ks);
+
 	errno = ENOSYS;
 	return -1;
-}
-
-void ssl_helper_shutdown(ssl_helper_t *ssl_struct)
-{
-	int ret;
-
-	char buf[SSL_HELPER_BUFFER_SIZE + 1] = { 0 };
-	size_t bytes_read;
-
-	errno = 0;
-
-	/* read everything */
-	if (SSL_pending(ssl_struct->ssl)) {
-		do {
-			if ((ret = SSL_read_ex(ssl_struct->ssl, buf,
-					       SSL_HELPER_BUFFER_SIZE,
-					       &bytes_read)) == 0) {
-				ret = SSL_get_error(ssl_struct->ssl, ret);
-				fputs("Read error: ", stderr);
-				fputs(ssl_helper_get_err_code(
-					      ssl_codes, SSL_CODES_SIZE, ret),
-				      stderr);
-				fprintf(stderr, "\nerrno: %d\n", errno);
-				fflush(stderr);
-
-				if (ret == SSL_ERROR_SSL ||
-				    ret == SSL_ERROR_SYSCALL)
-					return;
-			}
-		} while (bytes_read != 0);
-	}
-
-	if ((ret = SSL_shutdown(ssl_struct->ssl)) == 0) {
-		/* bidirectional shutdown, I guess. */
-		SSL_read(ssl_struct->ssl, buf, SSL_HELPER_BUFFER_SIZE);
-	} else if (ret < 0) {
-		ret = SSL_get_error(ssl_struct->ssl, ret);
-		fputs("shutdown error: ", stderr);
-		fputs(ssl_helper_get_err_code(ssl_codes, SSL_CODES_SIZE, ret),
-		      stderr);
-		fprintf(stderr, "\nerrno: %d\n", errno);
-		fflush(stderr);
-	}
 }
 

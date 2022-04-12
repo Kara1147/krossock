@@ -1,3 +1,3 @@
 noinst_LIBRARIES = $(top_builddir)/bin/libkrossock.a
-__top_builddir__bin_libkrossock_a_SOURCES = krossock.c
+__top_builddir__bin_libkrossock_a_SOURCES = krossock.c krossock_ssl.c
 include_HEADERS = krossock.h krossock_ssl.h
