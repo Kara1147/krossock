@@ -1,3 +1,27 @@
+/*
+ * MIT License
+ * 
+ * Copyright (c) 2022 Kara
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
 #include "includes.h"
 #include "krossock.h"
 
@@ -12,7 +36,7 @@ typedef struct krossock_t {
 		SSL *ssl;
 		BIO *bio;
 	} kssl;
-} *krossock_t;
+} * krossock_t;
 
 krossock_t krossock_init(struct init_data *data)
 {
@@ -34,7 +58,8 @@ krossock_t krossock_init(struct init_data *data)
 	DEBUG("krossock (%lx) allocated\n", (unsigned long int)(ks));
 
 	/* create a socket */
-	if ((ks->ksock.sock = socket(data->domain, data->style, data->protocol)) < 0) {
+	if ((ks->ksock.sock =
+		     socket(data->domain, data->style, data->protocol)) < 0) {
 		DEBUG("socket() failed\n");
 		goto die;
 	}
@@ -53,7 +78,8 @@ krossock_t krossock_init(struct init_data *data)
 		OpenSSL_add_all_algorithms();
 
 		/* create bio */
-		if ((ks->kssl.bio = BIO_new_socket(ks->ksock.sock, 0)) == NULL) {
+		if ((ks->kssl.bio = BIO_new_socket(ks->ksock.sock, 0)) ==
+		    NULL) {
 			DEBUG("BIO_new_socket() failed\n");
 			goto die;
 		}
@@ -81,7 +107,7 @@ krossock_t krossock_init(struct init_data *data)
 		/* set ssl mode */
 		//SSL_set_mode(kssl->ssl, SSL_MODE_AUTO_RETRY);
 	}
-	
+
 	DEBUG("krossock (%lx) initialized\n", (unsigned long int)(ks));
 
 	return ks;
@@ -114,7 +140,7 @@ void krossock_destroy(krossock_t ks)
 	DEBUG("krossock (%lx) free'd\n", (unsigned long int)(ks));
 }
 
-krossock_t krossock_connect(const char* address)
+krossock_t krossock_connect(const char *address)
 {
 	krossock_t ks;
 	struct init_data data;
@@ -126,7 +152,8 @@ krossock_t krossock_connect(const char* address)
 	}
 
 	if (socket_parse_address(address, &data) < 0) {
-		DEBUG("socket_parse_address() failed for address '%s'\n", address);
+		DEBUG("socket_parse_address() failed for address '%s'\n",
+		      address);
 		return NULL;
 	}
 
@@ -137,7 +164,8 @@ krossock_t krossock_connect(const char* address)
 	}
 
 	/* connect */
-	if (connect(ks->ksock.sock, (struct sockaddr *) &(data.sockaddr), data.sockaddr_len) < 0) {
+	if (connect(ks->ksock.sock, (struct sockaddr *)&(data.sockaddr),
+		    data.sockaddr_len) < 0) {
 		DEBUG("connect() failed\n");
 		krossock_destroy(ks);
 		return NULL;
@@ -150,7 +178,8 @@ krossock_t krossock_connect(const char* address)
 			krossock_destroy(ks);
 			return NULL;
 		}
-		DEBUG("ssl (%lx) connected\n", (unsigned long int)(ks->kssl.ssl));
+		DEBUG("ssl (%lx) connected\n",
+		      (unsigned long int)(ks->kssl.ssl));
 	}
 
 	return ks;
@@ -166,7 +195,8 @@ void krossock_disconnect(krossock_t ks)
 
 	if (ks->type == SSL_SOCKET) {
 		SSL_shutdown(ks->kssl.ssl);
-		DEBUG("ssl (%lx) disconnected\n", (unsigned long int)(ks->kssl.ssl));
+		DEBUG("ssl (%lx) disconnected\n",
+		      (unsigned long int)(ks->kssl.ssl));
 	}
 
 	close(ks->ksock.sock);
@@ -304,4 +334,3 @@ int krossock_eof(krossock_t ks)
 		return ks->ksock.eof;
 	}
 }
-
