@@ -1,3 +1,9 @@
+2022-04-13 Kara O'Dell <contact@kara-online.net>
+
+	Initial Release: version 1.0.0
+	+ Connecting works for non-ssl and ssl connections
+	+ INET only at the moment, unix sockets and files not supported yet
+
 2022-04-06 Kara O'Dell <contact@kara-online.net>
 
 	Initial Version

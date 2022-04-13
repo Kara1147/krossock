@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([Krossock], [0.1.0], [bugs@kara-online.net], [krossock], [https://github.com/Kara1147/krossock])
+AC_INIT([Krossock], [1.0.0], [bugs@kara-online.net], [krossock], [https://github.com/Kara1147/krossock])
 
 m4_include([ax_valgrind_check.m4])
 
