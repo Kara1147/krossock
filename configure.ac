@@ -72,7 +72,7 @@ AC_CHECK_HEADERS([openssl/bio.h], [], [
 
 #types
 AC_TYPE_SIZE_T
-AC_TYPE_UINT16_T
+AC_TYPE_SSIZE_T
 
 #functions
 AC_FUNC_MALLOC

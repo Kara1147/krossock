@@ -1,37 +1,22 @@
 #include "includes.h"
 #include "krossock.h"
-#include "krossock_ssl.h"
 
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <sys/un.h>
-#include <unistd.h>
+typedef struct krossock_t {
+	enum { SOCKET, SSL_SOCKET } type;
+	struct {
+		int eof;
+		int sock;
+	} ksock;
+	struct {
+		SSL_CTX *ctx;
+		SSL *ssl;
+		BIO *bio;
+	} kssl;
+} *krossock_t;
 
-typedef struct krossock_socket {
-	int sock;
-} *krossock_socket;
-
-struct socket_data {
-	union {
-		struct sockaddr_in in;
-		struct sockaddr_in6 in6;
-		struct sockaddr_un un;
-	} sockaddr;
-	size_t sockaddr_len;
-
-	int domain;
-	int style;
-	int protocol;
-};
-
-krossock_socket socket_init(struct socket_data *data)
+krossock_t krossock_init(struct init_data *data)
 {
-	krossock_socket ksocket;
+	krossock_t ks;
 
 	if (data == NULL) {
 		DEBUG("socket_init: data was NULL\n");
@@ -39,323 +24,311 @@ krossock_socket socket_init(struct socket_data *data)
 		return NULL;
 	}
 
-	if ((ksocket = malloc(sizeof(struct krossock_socket))) == NULL) {
-		DEBUG("socket_init: malloc() failed for ksocket\n");
+	/* initialize krossock */
+	if ((ks = malloc(sizeof(struct krossock_t))) == NULL) {
+		DEBUG("malloc() failed for ks\n");
 		errno = ENOMEM;
 		return NULL;
 	}
-	
-	DEBUG("socket_init: krossock_socket (%lx) allocated\n", (unsigned long int)(ksocket));
 
-	memset(ksocket, 0, sizeof(struct krossock_socket));
+	DEBUG("krossock (%lx) allocated\n", (unsigned long int)(ks));
 
 	/* create a socket */
-	if ((ksocket->sock = socket(data->domain, data->style, data->protocol)) < 0) {
-		DEBUG("socket_init: socket() failed\n");
-		free(ksocket);
-		return NULL;
+	if ((ks->ksock.sock = socket(data->domain, data->style, data->protocol)) < 0) {
+		DEBUG("socket() failed\n");
+		goto die;
 	}
 
-	DEBUG("socket_init: socket (%d) created\n", ksocket->sock);
+	DEBUG("socket (%d) created\n", ks->ksock.sock);
 
-	return ksocket;
+	ks->type = SOCKET;
+
+	if (data->ssl) {
+		ks->type = SSL_SOCKET;
+
+		/* set up ssl things */
+		SSL_library_init();
+		SSL_load_error_strings();
+		//ERR_load_SSL_strings();
+		OpenSSL_add_all_algorithms();
+
+		/* create bio */
+		if ((ks->kssl.bio = BIO_new_socket(ks->ksock.sock, 0)) == NULL) {
+			DEBUG("BIO_new_socket() failed\n");
+			goto die;
+		}
+
+		DEBUG("bio (%lx) created\n", (unsigned long int)(ks->kssl.bio));
+
+		/* create ctx */
+		if ((ks->kssl.ctx = SSL_CTX_new(TLS_client_method())) == NULL) {
+			DEBUG("SSL_CTX_new() failed\n");
+			goto die;
+		}
+
+		DEBUG("ctx (%lx) created\n", (unsigned long int)(ks->kssl.ctx));
+
+		/* create ssl */
+		if ((ks->kssl.ssl = SSL_new(ks->kssl.ctx)) == NULL) {
+			DEBUG("SSL_new() failed\n");
+			goto die;
+		}
+
+		DEBUG("ssl (%lx) created\n", (unsigned long int)(ks->kssl.ssl));
+
+		SSL_set_bio(ks->kssl.ssl, ks->kssl.bio, ks->kssl.bio);
+
+		/* set ssl mode */
+		//SSL_set_mode(kssl->ssl, SSL_MODE_AUTO_RETRY);
+	}
+	
+	DEBUG("krossock (%lx) initialized\n", (unsigned long int)(ks));
+
+	return ks;
+die:
+	free(ks);
+	return NULL;
 }
 
-void socket_destroy(krossock_socket ksocket)
+void krossock_destroy(krossock_t ks)
 {
-	if (ksocket == NULL) {
-		DEBUG("socket_destroy: ksocket was NULL");
+	if (ks == NULL) {
+		DEBUG("ks was NULL");
 		errno = EINVAL;
 		return;
 	}
 
 	/* delete socket stuff */
-	free(ksocket);
-	DEBUG("socket_destroy: krossock_socket (%lx) free'd\n", (unsigned long int)(ksocket));
-}
-
-int socket_parse_address(const char *address, struct socket_data *data)
-{
-	char *buffer;
-	char *bufp;
-	
-	char *c;
-	int i;
-
-	struct hostent *he;
-
-	union {
-		struct in_addr in;
-		struct in6_addr in6;
-	} addr;
-
-	unsigned short int port;
-
-	if ((address == NULL) || (data == NULL)) {
-		DEBUG("socket_parse_address: address or data was NULL\n");
-		errno = EINVAL;
-		return -1;
+	if (ks->type == SSL_SOCKET) {
+		//BIO_free_all(ks->kssl.bio);
+		//DEBUG("bio (%lx) free'd\n", (unsigned long int)(ks->kssl.bio));
+		SSL_CTX_free(ks->kssl.ctx);
+		DEBUG("ctx (%lx) free'd\n", (unsigned long int)(ks->kssl.ctx));
+		SSL_free(ks->kssl.ssl);
+		DEBUG("ssl (%lx) free'd\n", (unsigned long int)(ks->kssl.ssl));
+		DEBUG("bio (%lx) free'd\n", (unsigned long int)(ks->kssl.bio));
 	}
 
-	if ((buffer = malloc(strlen(address) + 1)) == NULL) {
-		DEBUG("socket_parse_address: malloc() failed for buffer\n");
-		errno = ENOMEM;
-		return -1;
-	}
+	free(ks);
 
-	strcpy(buffer, address);
-	bufp = buffer;
-
-	/* 
-	 * NAMESPACE:
-	 *  proto:
-	 *   http   -> PF_INET
-	 *   file   -> PF_LOCAL
-	 *   unix   -> PF_LOCAL
-	 *   ftp    -> PF_INET
-	 *   telnet -> PF_INET
-	 *   ssh    -> PF_INET
-	 *   smtp   -> PF_INET
-	 */
-	if ((c = strstr(buffer, "://")) != NULL) {
-		/* we expect to find a protocol here */
-		*c = 0;
-
-		/*
-		 * PORT:
-		 *  proto:
-		 *   http   -> 80
-		 *   ftp    -> 21
-		 *   telnet -> 23
-		 *   ssh    -> 22
-		 *   smtp   -> 25
-		 *   file   -> don't care
-		 */
-		if ((i = strcmp(bufp, "http")) == 's') {
-			/* if proto is 'https', return 1 to promote connection to ssl */
-			free(buffer);
-			return 1;
-		} else if (i == 0) {
-			data->domain = AF_INET;
-			port = htons((unsigned short int)80); /* default */
-		} else if ((strcmp(bufp, "unix") == 0) || (strcmp(bufp, "file") == 0)) {
-			/* we're opening a file as a socket here so we're pretty much done */
-			data->domain = AF_LOCAL;
-			port = -1;
-		} else {
-			/* protocol not supported */
-			DEBUG("socket_parse_address: unsupported protocol '%s': result is '%c'(%d)\n", bufp, (char)i, i);
-			errno = EINVAL;
-			goto die;
-		}
-
-		bufp = c + 3;
-	}
-	/*
-	 * STYLE: (just use SOCK_STREAM for now)
-	 */
-	data->style = SOCK_STREAM;
-
-	/*	
-	 * PROTOCOL: (just use TCP for now)
-	 */
-	data->protocol = IPPROTO_TCP;
-
-	/*
-	 * ADDRESS:
-	 *  namespace:
-	 *   AF_LOCAL -> filesystem (precedence)
-	 *   AF_INET  -> ipv4, ipv6, or hostname
-	 */
-	if (data->domain == AF_INET) {
-		DEBUG("socket_parse_address: domain is AF_INET (internet)\n");
-		/* we're connecting to a server here so we need to figure out a lot of internet stuff */
-
-		/* look for any forward slashes (marks the end of the address) */
-		if ((c = strchr(bufp, '/')) != NULL)
-			*c = 0;
-
-		/*
-		 * PORT: (update)
-		 *  override default port with specified port
-		 */
-		if ((c = strrchr(bufp, ':')) != NULL) {
-			*(c++) = 0;
-			port = htons((unsigned short int)strtoul(c, NULL, 10));
-		}
-	
-		/* attempt to find hostent for what we have */
-		if ((he = gethostbyname(bufp)) == NULL) {
-			DEBUG("socket_parse_address: gethostbyname() lookup failed for hostname '%s'\n", bufp);
-			errno = EINVAL;
-			goto die;
-		}
-
-		DEBUG("socket_parse_address: hostname is '%s'\n", he->h_name);
-		DEBUG("krossock_connect: port is '%hu'\n", ntohs(port));
-
-		/* 
-		 * NAMESPACE: (update)
-		 *  family:
-		 *   AF_INET  -> AF_INET
-		 *   AF_INET6 -> AF_INET6
-		 */
-		/*
-		 * FAMILY:
-		 *  addrtype from hostent
-		 */
-		if (he->h_addrtype == AF_INET6) {
-			DEBUG("socket_parse_address: addrtype is AF_INET6 (ipv4)\n");
-			data->domain = AF_INET6;
-			data->sockaddr.in6.sin6_family = AF_INET6;
-			data->sockaddr.in6.sin6_addr = *(struct in6_addr *)(he->h_addr);
-			data->sockaddr.in6.sin6_flowinfo = 0;
-			data->sockaddr.in6.sin6_port = port;
-			data->sockaddr_len = sizeof(struct sockaddr_in6);
-		} else {
-			DEBUG("socket_parse_address: addrtype is AF_INET (ipv4)\n");
-			data->sockaddr.in.sin_family = AF_INET;
-			data->sockaddr.in.sin_addr = *(struct in_addr *)(he->h_addr);
-			data->sockaddr.in.sin_port = port;
-			data->sockaddr_len = sizeof(struct sockaddr_in);
-		}
-
-	} else if (data->domain == AF_LOCAL) {
-		DEBUG("socket_parse_address: domain is AF_LOCAL (socket)\n");
-		/*
-		 * FAMILY: AF_LOCAL
-		 */
-		data->sockaddr.un.sun_family = AF_LOCAL;
-		strncpy(data->sockaddr.un.sun_path, bufp, sizeof(data->sockaddr.un.sun_path));
-
-		data->sockaddr_len = SUN_LEN(&(data->sockaddr.un));
-	} else {
-		DEBUG("socket_parse_address: unknown domain\n");
-		errno = EINVAL;
-		goto die;
-	}
-
-	free(buffer);
-	return 0;
-die:
-	free(buffer);
-	return -1;
+	DEBUG("krossock (%lx) free'd\n", (unsigned long int)(ks));
 }
 
 krossock_t krossock_connect(const char* address)
 {
 	krossock_t ks;
-	krossock_socket ksocket;
-	struct socket_data data;
-	int promote;
+	struct init_data data;
 
 	if (address == NULL) {
-		DEBUG("krossock_connect: address was NULL\n");
+		DEBUG("address was NULL\n");
 		errno = EINVAL;
 		return NULL;
 	}
 
-	if ((promote = socket_parse_address(address, &data)) < 0) {
-		DEBUG("krossock_connect: socket_parse_address() failed for address '%s'\n", address);
+	if (socket_parse_address(address, &data) < 0) {
+		DEBUG("socket_parse_address() failed for address '%s'\n", address);
 		return NULL;
 	}
 
-	if (promote) {
-		DEBUG("krossock_connect: going ssl\n");
-		return krossock_connect_ssl(address);
-	}
-
-	/* create socket */
-	if ((ksocket = socket_init(&data)) == NULL) {
-		DEBUG("krossock_connect: socket_init() failed for ksocket\n");
+	/* create krossock */
+	if ((ks = krossock_init(&data)) == NULL) {
+		DEBUG("krossock_init() failed\n");
 		return NULL;
 	}
 
 	/* connect */
-	if (connect(ksocket->sock, (struct sockaddr *) &(data.sockaddr), data.sockaddr_len) < 0) {
-		DEBUG("krossock_connect: connect() failed for ksocket\n");
-		socket_destroy(ksocket);
+	if (connect(ks->ksock.sock, (struct sockaddr *) &(data.sockaddr), data.sockaddr_len) < 0) {
+		DEBUG("connect() failed\n");
+		krossock_destroy(ks);
 		return NULL;
 	}
+	DEBUG("socket (%d) connected\n", ks->ksock.sock);
 
-	DEBUG("krossock_connect: socket (%d) connected\n", ksocket->sock);
-
-	/* initialize krossock */
-	if ((ks = malloc(sizeof(struct krossock_t))) == NULL) {
-		DEBUG("krossock_connect: malloc() failed for ks\n");
-		errno = ENOMEM;
-		socket_destroy(ksocket);
-		return NULL;
+	if (ks->type == SSL_SOCKET) {
+		if (SSL_connect(ks->kssl.ssl) <= 0) {
+			DEBUG("SSL_connect() failed\n");
+			krossock_destroy(ks);
+			return NULL;
+		}
+		DEBUG("ssl (%lx) connected\n", (unsigned long int)(ks->kssl.ssl));
 	}
-
-	ks->type = SOCKET;
-	ks->data = (void *)ksocket;
-
-	DEBUG("krossock_connect: krossock (%lx) allocated and initialized\n", (unsigned long int)(ks));
 
 	return ks;
 }
 
 void krossock_disconnect(krossock_t ks)
 {
-	krossock_socket ksocket;
-
 	if (ks == NULL) {
-		DEBUG("krossock_disconnect: ks was NULL\n");
+		DEBUG("ks was NULL\n");
 		errno = EINVAL;
 		return;
 	}
 
 	if (ks->type == SSL_SOCKET) {
-		DEBUG("krossock_disconnect: going ssl\n");
-		return krossock_disconnect_ssl(ks);
+		SSL_shutdown(ks->kssl.ssl);
+		DEBUG("ssl (%lx) disconnected\n", (unsigned long int)(ks->kssl.ssl));
 	}
 
-	ksocket = (krossock_socket)ks->data;
+	close(ks->ksock.sock);
+	DEBUG("socket (%d) disconnected\n", ks->ksock.sock);
 
-	close(ksocket->sock);
-	DEBUG("krossock_disconnect: socket (%d) disconnected\n", ksocket->sock);
-
-	/* cleanup the socket stuff */
-	socket_destroy(ksocket);
-
-	/* free mem */
-	free(ks);
-	DEBUG("krossock_disconnect: krossock (%lx) free'd\n", (unsigned long int)(ks));
+	/* cleanup */
+	krossock_destroy(ks);
 }
 
-int krossock_send(krossock_t ks)
+ssize_t krossock_send(krossock_t ks, const void *buffer, size_t length, int flags)
 {
+	ssize_t sent;
+
 	if (ks == NULL) {
-		DEBUG("krossock_send: ks was NULL\n");
+		DEBUG("ks was NULL\n");
 		errno = EINVAL;
 		return -1;
 	}
 
 	if (ks->type == SSL_SOCKET) {
-		DEBUG("krossock_send: going ssl\n");
-		return krossock_send_ssl(ks);
+		DEBUG("using ssl method\n");
+
+		if (flags & MSG_EOR) {
+			/* terminate record */
+		} else {
+			/* do not terminate record */
+		}
+		
+		if (flags & MSG_OOB) {
+			/* send out-of-bounds data */
+		} else {
+			/* do not send out-of-bounds data */
+		}
+
+		if (flags & MSG_NOSIGNAL) {
+			/* do not send SIGPIPE if connection closed */
+		} else {
+			/* send SIGPIPE if connection closed */
+		}
+
+		DEBUG("not implemented\n");
+		errno = ENOSYS;
+		return -1;
 	}
-	
-	DEBUG("krossock_send: not implemented\n");
-	errno = ENOSYS;
-	return -1;
+
+	switch(sent = send(ks->ksock.sock, buffer, length, flags)) {
+	case ENOTCONN:
+		__attribute__((fallthrough));
+	case ECONNRESET:
+		DEBUG("EOF reached\n");
+		ks->ksock.eof = 1;
+		return 0;
+	}
+
+	DEBUG("read %ld of %ld\n", sent, length);
+
+	return sent;
 }
 
-int krossock_recv(krossock_t ks)
+ssize_t krossock_recv(krossock_t ks, void *buffer, size_t length, int flags)
 {
+	ssize_t read;
+
 	if (ks == NULL) {
-		DEBUG("krossock_recv: ks was NULL\n");
+		DEBUG("ks was NULL\n");
 		errno = EINVAL;
 		return -1;
 	}
 
 	if (ks->type == SSL_SOCKET) {
-		DEBUG("krossock_recv: going ssl\n");
-		return krossock_recv_ssl(ks);
+		DEBUG("using ssl method\n");
+
+		if (flags & MSG_PEEK) {
+			/* peek incoming message */
+		} else {
+			/* read incoming message */
+		}
+		
+		if (flags & MSG_OOB) {
+			/* recv out-of-bounds data */
+		} else {
+			/* do not recv out-of-bounds data */
+		}
+
+		if (flags & MSG_WAITALL) {
+			/* block until length is satisfied or error */
+		} else {
+			/* read as much as length, return on pending operations */
+		}
+
+		DEBUG("not implemented\n");
+		errno = ENOSYS;
+		return -1;
 	}
 
-	DEBUG("krossock_recv: not implemented\n");
-	errno = ENOSYS;
-	return -1;
+	switch(read = recv(ks->ksock.sock, buffer, length, flags)) {
+	case 0:
+		__attribute__((fallthrough));
+	case ENOTCONN:
+		__attribute__((fallthrough));
+	case ECONNRESET:
+		DEBUG("EOF reached\n");
+		ks->ksock.eof = 1;
+		return 0;
+	}
+
+	DEBUG("read %ld of %ld\n", read, length);
+
+	return read;
 }
+
+ssize_t krossock_read(krossock_t ks, void *buf, size_t nbyte)
+{
+	if (ks == NULL) {
+		DEBUG("ks was NULL\n");
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (ks->type == SSL_SOCKET) {
+		DEBUG("using ssl method\n");
+		DEBUG("not implemented\n");
+		errno = ENOSYS;
+		return -1;
+	}
+
+	return krossock_recv(ks, buf, nbyte, MSG_WAITALL);
+}
+
+ssize_t krossock_write(krossock_t ks, const void *buf, size_t nbyte)
+{
+	if (ks == NULL) {
+		DEBUG("ks was NULL\n");
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (ks->type == SSL_SOCKET) {
+		DEBUG("using ssl method\n");
+		DEBUG("not implemented\n");
+		errno = ENOSYS;
+		return -1;
+	}
+
+	return krossock_send(ks, buf, nbyte, 0);
+}
+
+int krossock_eof(krossock_t ks)
+{
+	if (ks == NULL) {
+		DEBUG("krossock_eof: ks was NULL\n");
+		errno = EINVAL;
+		return -1;
+	}
+
+	if (ks->type == SSL_SOCKET) {
+		DEBUG("using ssl method\n");
+		DEBUG("not implemented\n");
+		errno = ENOSYS;
+		return -1;
+	} else {
+		return ks->ksock.eof;
+	}
+}
+
