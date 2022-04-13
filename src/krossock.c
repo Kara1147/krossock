@@ -34,25 +34,29 @@ krossock_socket socket_init(struct socket_data *data)
 	krossock_socket ksocket;
 
 	if (data == NULL) {
-		DEBUG("socket_init: data was NULL");
+		DEBUG("socket_init: data was NULL\n");
 		errno = EINVAL;
 		return NULL;
 	}
 
 	if ((ksocket = malloc(sizeof(struct krossock_socket))) == NULL) {
-		DEBUG("socket_init: malloc() failed for ksocket");
+		DEBUG("socket_init: malloc() failed for ksocket\n");
 		errno = ENOMEM;
 		return NULL;
 	}
+	
+	DEBUG("socket_init: krossock_socket (%lx) allocated\n", (unsigned long int)(ksocket));
 
 	memset(ksocket, 0, sizeof(struct krossock_socket));
 
 	/* create a socket */
 	if ((ksocket->sock = socket(data->domain, data->style, data->protocol)) < 0) {
-		DEBUG("socket_init: socket() failed");
+		DEBUG("socket_init: socket() failed\n");
 		free(ksocket);
 		return NULL;
 	}
+
+	DEBUG("socket_init: socket (%d) created\n", ksocket->sock);
 
 	return ksocket;
 }
@@ -67,6 +71,7 @@ void socket_destroy(krossock_socket ksocket)
 
 	/* delete socket stuff */
 	free(ksocket);
+	DEBUG("socket_destroy: krossock_socket (%lx) free'd\n", (unsigned long int)(ksocket));
 }
 
 int socket_parse_address(const char *address, struct socket_data *data)
@@ -84,7 +89,7 @@ int socket_parse_address(const char *address, struct socket_data *data)
 		struct in6_addr in6;
 	} addr;
 
-	unsigned long port;
+	unsigned short int port;
 
 	if ((address == NULL) || (data == NULL)) {
 		DEBUG("socket_parse_address: address or data was NULL\n");
@@ -132,7 +137,7 @@ int socket_parse_address(const char *address, struct socket_data *data)
 			return 1;
 		} else if (i == 0) {
 			data->domain = AF_INET;
-			port = 80; /* default */
+			port = htons((unsigned short int)80); /* default */
 		} else if ((strcmp(bufp, "unix") == 0) || (strcmp(bufp, "file") == 0)) {
 			/* we're opening a file as a socket here so we're pretty much done */
 			data->domain = AF_LOCAL;
@@ -163,6 +168,7 @@ int socket_parse_address(const char *address, struct socket_data *data)
 	 *   AF_INET  -> ipv4, ipv6, or hostname
 	 */
 	if (data->domain == AF_INET) {
+		DEBUG("socket_parse_address: domain is AF_INET (internet)\n");
 		/* we're connecting to a server here so we need to figure out a lot of internet stuff */
 
 		/* look for any forward slashes (marks the end of the address) */
@@ -175,7 +181,7 @@ int socket_parse_address(const char *address, struct socket_data *data)
 		 */
 		if ((c = strrchr(bufp, ':')) != NULL) {
 			*(c++) = 0;
-			port = strtoul(c, NULL, 10);
+			port = htons((unsigned short int)strtoul(c, NULL, 10));
 		}
 	
 		/* attempt to find hostent for what we have */
@@ -186,17 +192,7 @@ int socket_parse_address(const char *address, struct socket_data *data)
 		}
 
 		DEBUG("socket_parse_address: hostname is '%s'\n", he->h_name);
-		DEBUG("krossock_connect: port is '%hu'\n", (uint16_t)port);
-/*
-		if ((i = inet_pton(he->h_addrtype, he->h_addr, &addr)) == 0) {
-			DEBUG("socket_parse_address: inet_pton() parse failed for address '%s'\n", he->h_addr);
-			errno = EINVAL;
-			goto die;
-		} else if (i < 0) {
-			DEBUG("socket_parse_address: inet_pton() no such address\n");
-			goto die;
-		}
-		*/
+		DEBUG("krossock_connect: port is '%hu'\n", ntohs(port));
 
 		/* 
 		 * NAMESPACE: (update)
@@ -209,20 +205,23 @@ int socket_parse_address(const char *address, struct socket_data *data)
 		 *  addrtype from hostent
 		 */
 		if (he->h_addrtype == AF_INET6) {
+			DEBUG("socket_parse_address: addrtype is AF_INET6 (ipv4)\n");
 			data->domain = AF_INET6;
 			data->sockaddr.in6.sin6_family = AF_INET6;
 			data->sockaddr.in6.sin6_addr = *(struct in6_addr *)(he->h_addr);
 			data->sockaddr.in6.sin6_flowinfo = 0;
-			data->sockaddr.in6.sin6_port = (uint16_t)port;
+			data->sockaddr.in6.sin6_port = port;
 			data->sockaddr_len = sizeof(struct sockaddr_in6);
 		} else {
+			DEBUG("socket_parse_address: addrtype is AF_INET (ipv4)\n");
 			data->sockaddr.in.sin_family = AF_INET;
 			data->sockaddr.in.sin_addr = *(struct in_addr *)(he->h_addr);
-			data->sockaddr.in.sin_port = (uint16_t)port;
+			data->sockaddr.in.sin_port = port;
 			data->sockaddr_len = sizeof(struct sockaddr_in);
 		}
 
 	} else if (data->domain == AF_LOCAL) {
+		DEBUG("socket_parse_address: domain is AF_LOCAL (socket)\n");
 		/*
 		 * FAMILY: AF_LOCAL
 		 */
@@ -279,6 +278,8 @@ krossock_t krossock_connect(const char* address)
 		return NULL;
 	}
 
+	DEBUG("krossock_connect: socket (%d) connected\n", ksocket->sock);
+
 	/* initialize krossock */
 	if ((ks = malloc(sizeof(struct krossock_t))) == NULL) {
 		DEBUG("krossock_connect: malloc() failed for ks\n");
@@ -289,6 +290,8 @@ krossock_t krossock_connect(const char* address)
 
 	ks->type = SOCKET;
 	ks->data = (void *)ksocket;
+
+	DEBUG("krossock_connect: krossock (%lx) allocated and initialized\n", (unsigned long int)(ks));
 
 	return ks;
 }
@@ -311,12 +314,14 @@ void krossock_disconnect(krossock_t ks)
 	ksocket = (krossock_socket)ks->data;
 
 	close(ksocket->sock);
+	DEBUG("krossock_disconnect: socket (%d) disconnected\n", ksocket->sock);
 
 	/* cleanup the socket stuff */
 	socket_destroy(ksocket);
 
 	/* free mem */
 	free(ks);
+	DEBUG("krossock_disconnect: krossock (%lx) free'd\n", (unsigned long int)(ks));
 }
 
 int krossock_send(krossock_t ks)
