@@ -15,6 +15,7 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/un.h>
+#include <poll.h>
 
 #include <openssl/bio.h>
 #include <openssl/err.h>

@@ -13,7 +13,7 @@ int main()
 	krossock_t ks = NULL;
 	int ret = 0;
 
-	ks = krossock_connect("icanhazip.com");
+	ks = krossock_connect("https://icanhazip.com");
 
 	if (ks == NULL) {
 		fputs("connection FAILED!\n", stderr);

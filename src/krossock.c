@@ -176,58 +176,9 @@ void krossock_disconnect(krossock_t ks)
 	krossock_destroy(ks);
 }
 
-ssize_t krossock_send(krossock_t ks, const void *buffer, size_t length, int flags)
+ssize_t krossock_peek(krossock_t ks, void *buf, size_t nbyte)
 {
-	ssize_t sent;
-
-	if (ks == NULL) {
-		DEBUG("ks was NULL\n");
-		errno = EINVAL;
-		return -1;
-	}
-
-	if (ks->type == SSL_SOCKET) {
-		DEBUG("using ssl method\n");
-
-		if (flags & MSG_EOR) {
-			/* terminate record */
-		} else {
-			/* do not terminate record */
-		}
-		
-		if (flags & MSG_OOB) {
-			/* send out-of-bounds data */
-		} else {
-			/* do not send out-of-bounds data */
-		}
-
-		if (flags & MSG_NOSIGNAL) {
-			/* do not send SIGPIPE if connection closed */
-		} else {
-			/* send SIGPIPE if connection closed */
-		}
-
-		DEBUG("not implemented\n");
-		errno = ENOSYS;
-		return -1;
-	}
-
-	switch(sent = send(ks->ksock.sock, buffer, length, flags)) {
-	case ENOTCONN:
-		__attribute__((fallthrough));
-	case ECONNRESET:
-		DEBUG("EOF reached\n");
-		ks->ksock.eof = 1;
-		return 0;
-	}
-
-	DEBUG("read %ld of %ld\n", sent, length);
-
-	return sent;
-}
-
-ssize_t krossock_recv(krossock_t ks, void *buffer, size_t length, int flags)
-{
+	struct pollfd fds;
 	ssize_t read;
 
 	if (ks == NULL) {
@@ -236,82 +187,104 @@ ssize_t krossock_recv(krossock_t ks, void *buffer, size_t length, int flags)
 		return -1;
 	}
 
+	fds.fd = ks->ksock.sock;
+	fds.events = POLLHUP;
+
 	if (ks->type == SSL_SOCKET) {
 		DEBUG("using ssl method\n");
-
-		if (flags & MSG_PEEK) {
-			/* peek incoming message */
-		} else {
-			/* read incoming message */
-		}
-		
-		if (flags & MSG_OOB) {
-			/* recv out-of-bounds data */
-		} else {
-			/* do not recv out-of-bounds data */
-		}
-
-		if (flags & MSG_WAITALL) {
-			/* block until length is satisfied or error */
-		} else {
-			/* read as much as length, return on pending operations */
-		}
-
-		DEBUG("not implemented\n");
-		errno = ENOSYS;
-		return -1;
+		DEBUG("not fully implemented\n");
+		/* peek incoming message */
+		SSL_peek_ex(ks->kssl.ssl, buf, nbyte, &read);
+	} else {
+		read = recv(ks->ksock.sock, buf, nbyte, MSG_PEEK);
 	}
 
-	switch(read = recv(ks->ksock.sock, buffer, length, flags)) {
-	case 0:
-		__attribute__((fallthrough));
-	case ENOTCONN:
-		__attribute__((fallthrough));
-	case ECONNRESET:
-		DEBUG("EOF reached\n");
-		ks->ksock.eof = 1;
-		return 0;
+	if (read <= 0) {
+		if (poll(&fds, 1, 200)) {
+			if (fds.revents & POLLHUP) {
+				DEBUG("EOF reached\n");
+				ks->ksock.eof = 1;
+			}
+		}
 	}
 
-	DEBUG("read %ld of %ld\n", read, length);
+	DEBUG("read %ld of %ld\n", read, nbyte);
 
 	return read;
 }
 
 ssize_t krossock_read(krossock_t ks, void *buf, size_t nbyte)
 {
+	struct pollfd fds;
+	ssize_t read;
+
 	if (ks == NULL) {
 		DEBUG("ks was NULL\n");
 		errno = EINVAL;
 		return -1;
 	}
 
+	fds.fd = ks->ksock.sock;
+	fds.events = POLLHUP;
+
 	if (ks->type == SSL_SOCKET) {
 		DEBUG("using ssl method\n");
-		DEBUG("not implemented\n");
-		errno = ENOSYS;
-		return -1;
+		DEBUG("not fully implemented\n");
+		/* read incoming message */
+		SSL_read_ex(ks->kssl.ssl, buf, nbyte, &read);
+	} else {
+		read = recv(ks->ksock.sock, buf, nbyte, 0);
 	}
 
-	return krossock_recv(ks, buf, nbyte, MSG_WAITALL);
+	if (read <= 0) {
+		if (poll(&fds, 1, 200)) {
+			if (fds.revents & POLLHUP) {
+				DEBUG("EOF reached\n");
+				ks->ksock.eof = 1;
+			}
+		}
+	}
+
+	DEBUG("read %ld of %ld\n", read, nbyte);
+
+	return read;
 }
 
 ssize_t krossock_write(krossock_t ks, const void *buf, size_t nbyte)
 {
+	struct pollfd fds;
+	ssize_t wrote;
+
 	if (ks == NULL) {
 		DEBUG("ks was NULL\n");
 		errno = EINVAL;
 		return -1;
 	}
 
+	fds.fd = ks->ksock.sock;
+	fds.events = POLLHUP;
+
 	if (ks->type == SSL_SOCKET) {
 		DEBUG("using ssl method\n");
-		DEBUG("not implemented\n");
-		errno = ENOSYS;
-		return -1;
+		DEBUG("not fully implemented\n");
+		/* write message */
+		SSL_write_ex(ks->kssl.ssl, buf, nbyte, &wrote);
+	} else {
+		wrote = send(ks->ksock.sock, buf, nbyte, 0);
 	}
 
-	return krossock_send(ks, buf, nbyte, 0);
+	if (wrote <= 0) {
+		if (poll(&fds, 1, 200)) {
+			if (fds.revents & POLLHUP) {
+				DEBUG("EOF reached\n");
+				ks->ksock.eof = 1;
+			}
+		}
+	}
+
+	DEBUG("wrote %ld of %ld\n", wrote, nbyte);
+
+	return wrote;
 }
 
 int krossock_eof(krossock_t ks)
